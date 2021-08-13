@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Make lambda code & role
+
+Parameters: 
+  LineAccessToken:
+    Description: "WriteLineAccessToken"
+    Type: String
+    Default: write your line access token
+  OpenWeatherAPI:
+    Description: "your Open WeatherAPI"
+    Type: String
+    Default: write your api
+  SearchAreaName:
+    Description: "Search Area Name"
+    Type: String
+    Default: Kobe
+
+Resources: 
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: makeLambdaPolicyName
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - "logs:CreateLogGroup"
+            - "logs:CreateLogStream"
+            - "logs:PutLogEvents"
+            Resource: "*"
+
+  GetOpenWeatherLambda:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Handler: "index.handler"
+      Role: 
+        Fn::GetAtt: 
+          - "LambdaRole"
+          - "Arn"
+      Environment:
+        Variables:
+          open_weather_api: !Ref OpenWeatherAPI
+          search_area_name: !Ref SearchAreaName
+          line_access_token: !Ref LineAccessToken
+      Runtime: "python3.7"
+      Code: 
+        ZipFile: |
+          import os
+          import requests
+
+          API_KEY = os.environ["open_weather_api"]
+          city_name = os.environ["search_area_name"]
+          line_access_token = os.environ["line_access_token"]
+
+          def handler(event, context):
+              api = "http://api.openweathermap.org/data/2.5/weather?units=metric&q={city}&APPID={key}"
+              url = api.format(city = city_name, key = API_KEY)
+              response = requests.get(url)
+              data = response.json()
+              print(data)
+              city_wea = data['weather'][0]['main']
+              city_temp = data['main']['temp']
+              make_text = "{0}の天気と気温について\n気温: {1}°\n天気: {2}".format(city_name, city_temp, city_wea)
+              print(make_text)
+              
+              headers = {"Authorization": "Bearer %s" % line_access_token}
+              line_url = "https://notify-api.line.me/api/notify"
+              line_send_text = {'message': make_text}
+              requests.post(line_url, headers=headers, data=line_send_text)
+
+  EveryDayLaunchGetOpenWeatherLambda:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: ’Every Launch lambda’
+      ScheduleExpression: 'cron(0 0 * * ? *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt GetOpenWeatherLambda.Arn
+          Id: ScheduleEvent1Target
+    DependsOn:
+      - GetOpenWeatherLambda
